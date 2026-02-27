@@ -22,7 +22,23 @@ class AcpJsonRpcServer:
         self._send_lock = asyncio.Lock()
         self._line_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
+    @staticmethod
+    def _force_utf8_stdio() -> None:
+        """Best-effort stdio reconfigure for stable ACP transport encoding."""
+        streams = (
+            (sys.stdin, "strict"),
+            (sys.stdout, "strict"),
+            (sys.stderr, "backslashreplace"),
+        )
+        for stream, errors in streams:
+            try:
+                stream.reconfigure(encoding="utf-8", errors=errors)  # type: ignore[attr-defined]
+            except Exception:
+                # Some wrapped streams may not support reconfigure().
+                pass
+
     async def run_stdio(self) -> None:
+        self._force_utf8_stdio()
         loop = asyncio.get_running_loop()
 
         def _stdin_reader() -> None:
