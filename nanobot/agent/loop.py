@@ -175,6 +175,11 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        on_tool_approval: Callable[[str, dict[str, Any]], Awaitable[tuple[bool, str | None]]] | None = None,
+        on_tool_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        on_thought: Callable[[str], Awaitable[None]] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+        on_tool_execute: Callable[[str, dict[str, Any]], Awaitable[tuple[bool, str]]] | None = None,
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run the agent iteration loop. Returns (final_content, tools_used, messages)."""
         messages = initial_messages
@@ -183,6 +188,8 @@ class AgentLoop:
         tools_used: list[str] = []
 
         while iteration < self.max_iterations:
+            if should_cancel and should_cancel():
+                raise asyncio.CancelledError("Cancelled by caller")
             iteration += 1
 
             response = await self.provider.chat(
@@ -194,6 +201,8 @@ class AgentLoop:
             )
 
             if response.has_tool_calls:
+                if on_thought and response.reasoning_content:
+                    await on_thought(response.reasoning_content)
                 if on_progress:
                     clean = self._strip_think(response.content)
                     if clean:
@@ -217,14 +226,74 @@ class AgentLoop:
                 )
 
                 for tool_call in response.tool_calls:
+                    if should_cancel and should_cancel():
+                        raise asyncio.CancelledError("Cancelled by caller")
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    if on_tool_event:
+                        await on_tool_event(
+                            {
+                                "tool_call_id": tool_call.id,
+                                "name": tool_call.name,
+                                "arguments": tool_call.arguments,
+                                "phase": "start",
+                                "status": "in_progress",
+                            }
+                        )
+                    if on_tool_approval:
+                        allowed, reason = await on_tool_approval(
+                            tool_call.name,
+                            tool_call.arguments,
+                        )
+                        if not allowed:
+                            deny_reason = reason or "Denied by ACP client"
+                            result = (
+                                f"Error: Permission denied for tool '{tool_call.name}'. "
+                                f"{deny_reason}"
+                            )
+                            messages = self.context.add_tool_result(
+                                messages, tool_call.id, tool_call.name, result
+                            )
+                            if on_tool_event:
+                                await on_tool_event(
+                                    {
+                                        "tool_call_id": tool_call.id,
+                                        "name": tool_call.name,
+                                        "arguments": tool_call.arguments,
+                                        "phase": "end",
+                                        "status": "failed",
+                                        "result": result,
+                                    }
+                                )
+                            continue
+                    handled = False
+                    result = ""
+                    if on_tool_execute:
+                        handled, result = await on_tool_execute(
+                            tool_call.name,
+                            tool_call.arguments,
+                        )
+                    if not handled:
+                        result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
+                    if on_tool_event:
+                        status = "failed" if result.startswith("Error") else "completed"
+                        await on_tool_event(
+                            {
+                                "tool_call_id": tool_call.id,
+                                "name": tool_call.name,
+                                "arguments": tool_call.arguments,
+                                "phase": "end",
+                                "status": status,
+                                "result": result,
+                            }
+                        )
             else:
+                if on_thought and response.reasoning_content:
+                    await on_thought(response.reasoning_content)
                 final_content = self._strip_think(response.content)
                 break
 
@@ -298,6 +367,11 @@ class AgentLoop:
         msg: InboundMessage,
         session_key: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
+        on_tool_approval: Callable[[str, dict[str, Any]], Awaitable[tuple[bool, str | None]]] | None = None,
+        on_tool_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        on_thought: Callable[[str], Awaitable[None]] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+        on_tool_execute: Callable[[str, dict[str, Any]], Awaitable[tuple[bool, str]]] | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
         # System messages: parse origin from chat_id ("channel:chat_id")
@@ -401,7 +475,13 @@ class AgentLoop:
             ))
 
         final_content, _, all_msgs = await self._run_agent_loop(
-            initial_messages, on_progress=on_progress or _bus_progress,
+            initial_messages,
+            on_progress=on_progress or _bus_progress,
+            on_tool_approval=on_tool_approval,
+            on_tool_event=on_tool_event,
+            on_thought=on_thought,
+            should_cancel=should_cancel,
+            on_tool_execute=on_tool_execute,
         )
 
         if final_content is None:
@@ -451,9 +531,23 @@ class AgentLoop:
         channel: str = "cli",
         chat_id: str = "direct",
         on_progress: Callable[[str], Awaitable[None]] | None = None,
+        on_tool_approval: Callable[[str, dict[str, Any]], Awaitable[tuple[bool, str | None]]] | None = None,
+        on_tool_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        on_thought: Callable[[str], Awaitable[None]] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+        on_tool_execute: Callable[[str, dict[str, Any]], Awaitable[tuple[bool, str]]] | None = None,
     ) -> str:
         """Process a message directly (for CLI or cron usage)."""
         await self._connect_mcp()
         msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
-        response = await self._process_message(msg, session_key=session_key, on_progress=on_progress)
+        response = await self._process_message(
+            msg,
+            session_key=session_key,
+            on_progress=on_progress,
+            on_tool_approval=on_tool_approval,
+            on_tool_event=on_tool_event,
+            on_thought=on_thought,
+            should_cancel=should_cancel,
+            on_tool_execute=on_tool_execute,
+        )
         return response.content if response else ""

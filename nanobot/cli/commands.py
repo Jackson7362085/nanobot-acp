@@ -425,6 +425,68 @@ def gateway(
     asyncio.run(run())
 
 
+@app.command()
+def acp(
+    logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs on stderr"),
+):
+    """Start nanobot in ACP (Agent Client Protocol) mode over stdio."""
+    from loguru import logger
+
+    from nanobot.acp.agent import AcpAgent
+    from nanobot.acp.server import AcpJsonRpcServer
+    from nanobot.agent.loop import AgentLoop
+    from nanobot.bus.queue import MessageBus
+    from nanobot.config.loader import get_data_dir, load_config
+    from nanobot.session.manager import SessionManager
+
+    config = load_config()
+    if logs:
+        logger.enable("nanobot")
+    else:
+        logger.disable("nanobot")
+
+    bus = MessageBus()
+    provider = _make_provider(config)
+    session_manager = SessionManager(config.workspace_path)
+    agent_loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=config.workspace_path,
+        model=config.agents.defaults.model,
+        temperature=config.agents.defaults.temperature,
+        max_tokens=config.agents.defaults.max_tokens,
+        max_iterations=config.agents.defaults.max_tool_iterations,
+        memory_window=config.agents.defaults.memory_window,
+        brave_api_key=config.tools.web.search.api_key or None,
+        exec_config=config.tools.exec,
+        cron_service=None,
+        restrict_to_workspace=config.tools.restrict_to_workspace,
+        session_manager=session_manager,
+        mcp_servers=config.tools.mcp_servers,
+        channels_config=config.channels,
+    )
+
+    data_dir = get_data_dir() / "acp"
+    catalog_path = data_dir / "sessions.json"
+    acp_agent = AcpAgent(
+        agent_loop,
+        session_manager,
+        model=agent_loop.model,
+        workspace=config.workspace_path,
+        catalog_path=catalog_path,
+    )
+    server = AcpJsonRpcServer(acp_agent)
+    acp_agent.bind_client_bridge(server)
+
+    async def run() -> None:
+        try:
+            await server.run_stdio()
+        finally:
+            await agent_loop.close_mcp()
+
+    asyncio.run(run())
+
+
 
 
 # ============================================================================
