@@ -156,9 +156,17 @@ def main(
     version: bool = typer.Option(
         None, "--version", "-v", callback=version_callback, is_eager=True
     ),
+    acp_mode: bool = typer.Option(
+        False,
+        "--acp",
+        help="Start ACP (Agent Client Protocol) mode over stdio",
+        is_eager=True,
+    ),
 ):
     """nanobot - Personal AI Assistant."""
-    pass
+    if acp_mode:
+        acp(logs=False)
+        raise typer.Exit()
 
 
 # ============================================================================
