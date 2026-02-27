@@ -21,9 +21,22 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from nanobot import __version__, __logo__
 from nanobot.config.schema import Config
 
+
+def _safe_logo() -> str:
+    """Return a terminal-safe logo string for current stdout encoding."""
+    encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
+    if encoding.startswith("utf"):
+        return __logo__
+    try:
+        __logo__.encode(getattr(sys.stdout, "encoding", None) or "utf-8")
+        return __logo__
+    except Exception:
+        return "nanobot"
+
+
 app = typer.Typer(
     name="nanobot",
-    help=f"{__logo__} nanobot - Personal AI Assistant",
+    help=f"{_safe_logo()} nanobot - Personal AI Assistant",
     no_args_is_help=True,
 )
 
@@ -102,7 +115,7 @@ def _print_agent_response(response: str, render_markdown: bool) -> None:
     content = response or ""
     body = Markdown(content) if render_markdown else Text(content)
     console.print()
-    console.print(f"[cyan]{__logo__} nanobot[/cyan]")
+    console.print(f"[cyan]{_safe_logo()} nanobot[/cyan]")
     console.print(body)
     console.print()
 
@@ -134,7 +147,7 @@ async def _read_interactive_input_async() -> str:
 
 def version_callback(value: bool):
     if value:
-        console.print(f"{__logo__} nanobot v{__version__}")
+        console.print(f"{_safe_logo()} nanobot v{__version__}")
         raise typer.Exit()
 
 
@@ -188,7 +201,7 @@ def onboard():
     # Create default bootstrap files
     _create_workspace_templates(workspace)
     
-    console.print(f"\n{__logo__} nanobot is ready!")
+    console.print(f"\n{_safe_logo()} nanobot is ready!")
     console.print("\nNext steps:")
     console.print("  1. Add your API key to [cyan]~/.nanobot/config.json[/cyan]")
     console.print("     Get one at: https://openrouter.ai/keys")
@@ -291,7 +304,7 @@ def gateway(
         import logging
         logging.basicConfig(level=logging.DEBUG)
     
-    console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
+    console.print(f"{_safe_logo()} Starting nanobot gateway on port {port}...")
     
     config = load_config()
     bus = MessageBus()
@@ -568,7 +581,7 @@ def agent(
         # Interactive mode — route through bus like other channels
         from nanobot.bus.events import InboundMessage
         _init_prompt_session()
-        console.print(f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
+        console.print(f"{_safe_logo()} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
 
         if ":" in session_id:
             cli_channel, cli_chat_id = session_id.split(":", 1)
@@ -795,7 +808,7 @@ def _get_bridge_dir() -> Path:
         console.print("Try reinstalling: pip install --force-reinstall nanobot")
         raise typer.Exit(1)
     
-    console.print(f"{__logo__} Setting up bridge...")
+    console.print(f"{_safe_logo()} Setting up bridge...")
     
     # Copy to user directory
     user_bridge.parent.mkdir(parents=True, exist_ok=True)
@@ -830,7 +843,7 @@ def channels_login():
     config = load_config()
     bridge_dir = _get_bridge_dir()
     
-    console.print(f"{__logo__} Starting bridge...")
+    console.print(f"{_safe_logo()} Starting bridge...")
     console.print("Scan the QR code to connect.\n")
     
     env = {**os.environ}
@@ -1071,7 +1084,7 @@ def status():
     config = load_config()
     workspace = config.workspace_path
 
-    console.print(f"{__logo__} nanobot Status\n")
+    console.print(f"{_safe_logo()} nanobot Status\n")
 
     console.print(f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}")
     console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")
@@ -1136,7 +1149,7 @@ def provider_login(
         console.print(f"[red]Login not implemented for {spec.label}[/red]")
         raise typer.Exit(1)
 
-    console.print(f"{__logo__} OAuth Login - {spec.label}\n")
+    console.print(f"{_safe_logo()} OAuth Login - {spec.label}\n")
     handler()
 
 
